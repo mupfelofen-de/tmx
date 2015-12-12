@@ -4,8 +4,6 @@
 	see http://www.xmlsoft.org/examples/index.html#reader1.c
 */
 
-#ifdef WANT_XML
-
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -145,6 +143,14 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj) {
 	char *value;
 
 	/* parses each attribute */
+	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"id"))) { /* id */
+		obj->id = atoi(value);
+		tmx_free_func(value);
+	} else {
+		tmx_err(E_MISSEL, "xml parser: missing 'id' attribute in the 'object' element");
+		return 0;
+	}
+
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"x"))) { /* x */
 		obj->x = atof(value);
 		tmx_free_func(value);
@@ -163,6 +169,10 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj) {
 
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"name"))) { /* name */
 		obj->name = value;
+	}
+
+	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"type"))) { /* type */
+		obj->type = value;
 	}
 
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"visible"))) { /* visible */
@@ -687,6 +697,20 @@ static tmx_map *parse_root_map(xmlTextReaderPtr reader, const char *filename) {
 		goto cleanup;
 	}
 
+	value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"staggerindex"); /* staggerindex */
+	if (value != NULL && (res->stagger_index = parse_stagger_index(value), res->stagger_index == SI_NONE)) {
+		tmx_err(E_XDATA, "xml parser: unsupported 'staggerindex' '%s'", value);
+		goto cleanup;
+	}
+	tmx_free_func(value);
+
+	value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"staggeraxis"); /* staggeraxis */
+	if (res->stagger_axis = parse_stagger_axis(value), res->stagger_axis == SA_NONE) {
+		tmx_err(E_XDATA, "xml parser: unsupported 'staggeraxis' '%s'", value);
+		goto cleanup;
+	}
+	tmx_free_func(value);
+
 	value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"renderorder"); /* renderorder */
 	if (res->renderorder = parse_renderorder(value), res->renderorder == R_NONE) {
 		tmx_err(E_XDATA, "xml parser: unsupported 'renderorder' '%s'", value);
@@ -728,6 +752,11 @@ static tmx_map *parse_root_map(xmlTextReaderPtr reader, const char *filename) {
 
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"backgroundcolor"))) { /* backgroundcolor */
 		res->backgroundcolor = get_color_rgb(value);
+		tmx_free_func(value);
+	}
+
+	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"hexsidelength"))) { /* hexsidelength */
+		res->hexsidelength = atoi(value);
 		tmx_free_func(value);
 	}
 
@@ -773,16 +802,3 @@ tmx_map *parse_xml(const char *filename) {
 
 	return res;
 }
-
-#else
-
-#include <stdio.h>
-#include "tmx.h"
-#include "tmx_utils.h"
-
-tmx_map *parse_xml(const char *path) {
-	tmx_err(E_FONCT, "This library was not built with the XML parser");
-	return NULL;
-}
-
-#endif /* WANT_XML */
