@@ -1,13 +1,18 @@
 .. title:: LibTMX Reference Documentation
 
-LibTMX Reference Documentation
-==============================
+About libTMX
+============
+
+`libTMX <https://github.com/baylej/tmx>`_ is a small and very simple library to load maps created with
+`Tiled <https://www.mapeditor.org/>`_.
+
 
 .. toctree::
    :maxdepth: 1
 
-   About
-   Build
+   build
+   datastructure
+   functions
 
 Indices and tables
 ==================

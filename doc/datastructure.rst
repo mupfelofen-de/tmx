@@ -1,13 +1,13 @@
-About libTMX
-============
+The Data Structure
+==================
 
-Temporibus cupiditate aspernatur deleniti magni qui molestias. Aut eos aut in
-modi. Eos officia exercitationem sunt. Ut nesciunt aperiam quibusdam laborum
-accusamus fuga. Enim voluptas facilis quis numquam error sequi voluptates.
+**libTMX** loads maps into a plain old C datastructure, this page describes that data structure thoroughly.
+**libTMX** reuse name from the `TMX Format`_ for all its structure and structure members.
 
-Suscipit vitae sit fugit. Illum voluptatem molestiae possimus fuga voluptatibus.
-Neque voluptas cupiditate ipsum accusamus aspernatur atque quia dicta.
-Accusantium neque qui voluptas cumque.
+.. _TMX Format: https://doc.mapeditor.org/en/stable/reference/tmx-map-format/
+
+Enumerations
+------------
 
 Neque numquam voluptas consequatur vitae aliquid id. Porro excepturi tempore
 facilis. Sapiente aut inventore eos dolor laborum neque. Quia laborum totam sunt
@@ -18,6 +18,9 @@ Velit veritatis impedit dolor aut consequatur. Esse quod rerum ex. Corporis
 magni praesentium optio. Et quam ducimus ex incidunt sapiente. Tempore quasi rem
 illum atque et ab inventore enim. Iste eos delectus deleniti nostrum autem
 debitis.
+
+Data Structures
+---------------
 
 Consequuntur qui cum similique quo quas rerum. Voluptates vero voluptas
 repellendus possimus magnam labore non qui. Quis culpa molestiae error sit est
