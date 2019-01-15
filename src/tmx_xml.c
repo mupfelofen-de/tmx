@@ -4,6 +4,13 @@
 	see http://www.xmlsoft.org/examples/index.html#reader1.c
 */
 
+#ifdef __ANDROID__
+// Required by stdio's funopen()
+#ifndef __USE_BSD
+#define __USE_BSD
+#endif
+#endif
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +19,121 @@
 
 #include "tmx.h"
 #include "tmx_utils.h"
+
+#ifdef __ANDROID__
+// http://www.50ply.com/blog/2013/01/19/loading-compressed-android-assets-with-file-pointer/
+#include <android/asset_manager.h>
+#include <android/asset_manager_jni.h>
+#include <errno.h>
+#include <jni.h>
+#include "cwalk.h"
+
+static int android_read(void* cookie, char* buf, int size) {
+	return AAsset_read((AAsset*)cookie, buf, size);
+}
+
+static int android_write(void* cookie, const char* buf, int size) {
+	(void)cookie; (void)buf; (void)size;
+	return EACCES; // can't provide write access to the apk
+}
+
+static fpos_t android_seek(void* cookie, fpos_t offset, int whence) {
+	return AAsset_seek((AAsset*)cookie, offset, whence);
+}
+
+static int android_close(void* cookie) {
+	AAsset_close((AAsset*)cookie);
+	return 0;
+}
+
+static AAssetManager* android_asset_manager = NULL;
+void android_fopen_set_asset_manager(AAssetManager* manager) {
+	android_asset_manager = manager;
+}
+
+JNIEXPORT void JNICALL Java_org_libsdl_app_SDL_load(JNIEnv *env, jobject obj, jobject assetManager) {
+	(void)obj;
+	AAssetManager *mgr = AAssetManager_fromJava(env, assetManager);
+	if (NULL != mgr) {
+		android_fopen_set_asset_manager(mgr);
+	}
+}
+
+// Example how to adjust the corresponding .java files:
+// android-project/app/src/main/java/org/libsdl/app/SDL.java:
+/*
+    import android.content.res.AssetManager;
+
+    Public class SDL
+    {
+      // [...]
+
+      // Declare native method, still needs to be implemented in jni.
+      private static native void load(AssetManager mgr);
+
+      public static void loadAssetManager(Context context) {
+        // Get a reference to the asset manager instance and pass it along to the native mehod.
+        AssetManager mgr = context.getResources().getAssets();
+        load(mgr);
+      }
+
+      // [...]
+    }
+*/
+
+// android-project/app/src/main/java/org/libsdl/app/SDLActivity.java:
+/*
+    import android.content.res.AssetManager;
+
+    public class SDLActivity extends Activity implements View.OnSystemUiVisibilityChangeListener {
+      // [...]
+
+      // Setup
+      @Override
+      protected void onCreate(Bundle savedInstanceState) {
+      // [...]
+        SDL.loadAssetManager(this);
+      }
+    }
+*/
+
+static FILE* android_fopen(const char* fname, const char* mode) {
+	if (mode[0] == 'w') { return NULL; }
+
+	AAsset* asset = AAssetManager_open(android_asset_manager, fname, 0);
+	if (!asset) { return NULL; }
+
+	return funopen(asset, android_read, android_write, android_seek, android_close);
+}
+
+#define fopen(name, mode) android_fopen(name, mode)
+
+static char *fp_to_array(FILE *fp) {
+	char *buffer = NULL;
+	int   fsize  = 0;
+
+	if (NULL == fp) {
+		return NULL;
+	}
+
+	fseek(fp, 0L, SEEK_END);
+	fsize = ftell(fp);
+	rewind(fp);
+	buffer = malloc(fsize + 1);
+
+	if (NULL != buffer) {
+		for (int i = 0; i < fsize; i++) {
+			buffer[i] = fgetc(fp);
+		}
+	}
+	else {
+		return NULL;
+	}
+
+	buffer[fsize] = '\0';
+	return buffer;
+}
+#endif
 
 /*
 	 - Parsers -
@@ -238,6 +360,9 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 	char *value, *ab_path;
 	resource_holder *tmpl;
 	xmlTextReaderPtr sub_reader;
+	#ifdef __ANDROID__
+	char *buffer = NULL;
+	#endif
 
 	/* parses each attribute */
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"id"))) { /* id */
@@ -272,11 +397,38 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 			}
 		}
 		if (!(obj->template_ref)) {
+			#ifdef __ANDROID__
+			FILE *fp = NULL;
+			#endif
+
 			if (!(ab_path = mk_absolute_path(filename, value))) return 0;
+
+			#ifdef __ANDROID__
+			char ab_path_normalized[FILENAME_MAX];
+			cwk_path_normalize(ab_path, ab_path_normalized, sizeof(ab_path_normalized));
+			fp = fopen(ab_path_normalized, "r");
+			if (NULL != fp) {
+				buffer = fp_to_array(fp);
+				if (NULL == buffer) {
+					fclose(fp);
+					return 0;
+				}
+				fclose(fp);
+			} else {
+				tmx_err(E_XDATA, "xml parser: cannot open object template file '%s'", ab_path_normalized);
+				return 0;
+			}
+
+			if (!(sub_reader = xmlReaderForMemory(buffer, strlen(buffer), NULL, NULL, 0))) { /* opens */
+			#else
 			if (!(sub_reader = xmlReaderForFile(ab_path, NULL, 0))) { /* opens */
+			#endif
 				tmx_err(E_XDATA, "xml parser: cannot open object template file '%s'", ab_path);
 				tmx_free_func(ab_path);
 				tmx_free_func(value);
+				#ifdef __ANDROID__
+				free(buffer);
+				#endif
 				return 0;
 			}
 			obj->template_ref = parse_template_document(sub_reader, rc_mgr, ab_path); /* and parses the template file */
@@ -284,6 +436,9 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 			if (!(obj->template_ref))
 			{
 				tmx_free_func(value);
+				#ifdef __ANDROID__
+                                free(buffer);
+				#endif
 				return 0;
 			}
 			if (rc_mgr) {
@@ -335,12 +490,21 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 	curr_depth = xmlTextReaderDepth(reader);
 	if (!xmlTextReaderIsEmptyElement(reader)) {
 		do {
-			if (xmlTextReaderRead(reader) != 1) return 0; /* error_handler has been called */
-
+			if (xmlTextReaderRead(reader) != 1) { /* error_handler has been called */
+				#ifdef __ANDROID__
+				free(buffer);
+				#endif
+				return 0;
+			}
 			if (xmlTextReaderNodeType(reader) == XML_READER_TYPE_ELEMENT) {
 				name = (char*)xmlTextReaderConstName(reader);
 				if (!strcmp(name, "properties")) {
-					if (!parse_properties(reader, &(obj->properties))) return 0;
+					if (!parse_properties(reader, &(obj->properties))) {
+						#ifdef __ANDROID__
+						free(buffer);
+						#endif
+						return 0;
+					}
 				} else if (!strcmp(name, "ellipse")) {
 					obj->obj_type = OT_ELLIPSE;
 				} else {
@@ -352,14 +516,29 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 						obj->obj_type = OT_TEXT;
 					}
 					/* Unknow element, skip its tree */
-					else if (xmlTextReaderNext(reader) != 1) return 0;
+					else if (xmlTextReaderNext(reader) != 1) {
+						#ifdef __ANDROID__
+						free(buffer);
+						#endif
+						return 0;
+					}
 					if (obj->obj_type == OT_POLYGON || obj->obj_type == OT_POLYLINE) {
 						if (obj->content.shape = alloc_shape(), !(obj->content.shape)) return 0;
-						if (!parse_points(reader, obj->content.shape)) return 0;
+						if (!parse_points(reader, obj->content.shape)) {
+							#ifdef __ANDROID__
+							free(buffer);
+							#endif
+							return 0;
+						}
 					}
 					else if (obj->obj_type == OT_TEXT) {
 						if (obj->content.text = alloc_text(), !(obj->content.text)) return 0;
-						if (!parse_text(reader, obj->content.text)) return 0;
+						if (!parse_text(reader, obj->content.text)) {
+							#ifdef __ANDROID__
+							free(buffer);
+							#endif
+							return 0;
+						}
 					}
 				}
 			}
@@ -370,6 +549,9 @@ static int parse_object(xmlTextReaderPtr reader, tmx_object *obj, int is_on_map,
 	{
 		obj->obj_type = OT_POINT;
 	}
+	#ifdef __ANDROID__
+	free(buffer);
+	#endif
 	return 1;
 }
 
@@ -827,6 +1009,9 @@ static int parse_tileset_list(xmlTextReaderPtr reader, tmx_tileset_list **ts_hea
 	int ret;
 	char *value, *ab_path;
 	xmlTextReaderPtr sub_reader;
+	#ifdef __ANDROID__
+	char *buffer = NULL;
+	#endif
 
 	if (!(res_list = alloc_tileset_list())) return 0;
 	res_list->next = *ts_headadr;
@@ -843,6 +1028,10 @@ static int parse_tileset_list(xmlTextReaderPtr reader, tmx_tileset_list **ts_hea
 
 	/* External Tileset */
 	if ((value = (char*)xmlTextReaderGetAttribute(reader, (xmlChar*)"source"))) { /* source */
+		#ifdef __ANDROID__
+		FILE *fp = NULL;
+		#endif
+
 		if (rc_mgr) {
 			rc_holder = (resource_holder*) hashtable_get((void*)rc_mgr, value);
 			if (rc_holder && rc_holder->type == RC_TSX) {
@@ -867,22 +1056,56 @@ static int parse_tileset_list(xmlTextReaderPtr reader, tmx_tileset_list **ts_hea
 		}
 		if (!(ab_path = mk_absolute_path(filename, value))) return 0;
 		tmx_free_func(value);
+
+		#ifdef __ANDROID__
+		char ab_path_normalized[FILENAME_MAX];
+		cwk_path_normalize(ab_path, ab_path_normalized, sizeof(ab_path_normalized));
+		fp = fopen(ab_path_normalized, "r");
+		if (NULL != fp) {
+			buffer = fp_to_array(fp);
+			if (NULL == buffer) {
+				fclose(fp);
+				return 0;
+			}
+			fclose(fp);
+		} else {
+			tmx_err(E_XDATA, "xml parser: cannot open extern tileset '%s'", ab_path_normalized);
+			return 0;
+		}
+
+		if (!(sub_reader = xmlReaderForMemory(buffer, strlen(buffer), NULL, NULL, 0)) || !check_reader(sub_reader)) { /* opens */
+		#else
 		if (!(sub_reader = xmlReaderForFile(ab_path, NULL, 0)) || !check_reader(sub_reader)) { /* opens */
+		#endif
 			tmx_err(E_XDATA, "xml parser: cannot open extern tileset '%s'", ab_path);
 			tmx_free_func(ab_path);
+			#ifdef __ANDROID__
+			free(buffer);
+			#endif
 			return 0;
 		}
 		ret = parse_tileset(sub_reader, res, rc_mgr, ab_path); /* and parses the tsx file */
 		xmlFreeTextReader(sub_reader);
 		tmx_free_func(ab_path);
+		#ifdef __ANDROID__
+		free(buffer);
+		#endif
 		return ret;
 	}
 
 	/* Embedded tileset */
-	if (!(res = alloc_tileset())) return 0;
+	if (!(res = alloc_tileset())) {
+		#ifdef __ANDROID__
+		free(buffer);
+		#endif
+		return 0;
+	}
 	res_list->is_embedded = 1;
 	res_list->tileset = res;
 
+	#ifdef __ANDROID__
+	free(buffer);
+	#endif
 	return parse_tileset(reader, res, rc_mgr, filename);
 }
 
@@ -1102,16 +1325,40 @@ static tmx_template* parse_template_document(xmlTextReaderPtr reader, tmx_resour
 
 tmx_map *parse_xml(tmx_resource_manager *rc_mgr, const char *filename) {
 	xmlTextReaderPtr reader;
-	tmx_map *res = NULL;
+	tmx_map *res    = NULL;
+	#ifdef __ANDROID__
+	FILE    *fp     = NULL;
+	char    *buffer = NULL;
+	#endif
 
 	setup_libxml_mem();
 
+	#ifdef __ANDROID__
+	fp = fopen(filename, "r");
+	if (NULL != fp) {
+		buffer = fp_to_array(fp);
+		if (NULL == buffer) {
+			fclose(fp);
+			return res;
+		}
+		fclose(fp);
+	} else {
+		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
+		return 0;
+	}
+
+	if ((reader = xmlReaderForMemory(buffer, strlen(buffer), NULL, NULL, 0))) {
+	#else
 	if ((reader = xmlReaderForFile(filename, NULL, 0))) {
+	#endif
 		res = parse_map_document(reader, rc_mgr, filename);
 	} else {
 		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
 	}
 
+	#ifdef __ANDROID__
+        free(buffer);
+	#endif
 	return res;
 }
 
@@ -1166,16 +1413,40 @@ tmx_map* parse_xml_callback(tmx_resource_manager *rc_mgr, tmx_read_functor callb
 
 tmx_tileset* parse_tsx_xml(const char *filename) {
 	xmlTextReaderPtr reader;
-	tmx_tileset *res = NULL;
+	tmx_tileset *res    = NULL;
+	#ifdef __ANDROID__
+	FILE        *fp     = NULL;
+	char        *buffer = NULL;
+	#endif
 
 	setup_libxml_mem();
 
+	#ifdef __ANDROID__
+	fp = fopen(filename, "r");
+	if (NULL != fp) {
+		buffer = fp_to_array(fp);
+		if (NULL == buffer) {
+			fclose(fp);
+			return res;
+		}
+		fclose(fp);
+	} else {
+		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
+		return 0;
+	}
+
+	if ((reader = xmlReaderForMemory(buffer, strlen(buffer), NULL, NULL, 0))) {
+	#else
 	if ((reader = xmlReaderForFile(filename, NULL, 0))) {
+	#endif
 		res = parse_tileset_document(reader, filename);
 	} else {
 		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
 	}
 
+	#ifdef __ANDROID__
+        free(buffer);
+	#endif
 	return res;
 }
 
@@ -1231,15 +1502,39 @@ tmx_tileset* parse_tsx_xml_callback(tmx_read_functor callback, void *userdata) {
 tmx_template* parse_tx_xml(tmx_resource_manager *rc_mgr, const char *filename) {
 	xmlTextReaderPtr reader;
 	tmx_template *res = NULL;
+	#ifdef __ANDROID__
+	FILE    *fp       = NULL;
+	char    *buffer   = NULL;
+	#endif
 
 	setup_libxml_mem();
 
+	#ifdef __ANDROID__
+	fp = fopen(filename, "r");
+	if (NULL != fp) {
+		buffer = fp_to_array(fp);
+		if (NULL == buffer) {
+			fclose(fp);
+			return res;
+		}
+		fclose(fp);
+	} else {
+		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
+		return 0;
+	}
+
+	if ((reader = xmlReaderForMemory(buffer, strlen(buffer), NULL, NULL, 0))) {
+	#else
 	if ((reader = xmlReaderForFile(filename, NULL, 0))) {
+	#endif
 		res = parse_template_document(reader, rc_mgr, filename);
 	} else {
 		tmx_err(E_UNKN, "xml parser: unable to open %s", filename);
 	}
 
+	#ifdef __ANDROID__
+        free(buffer);
+	#endif
 	return res;
 }
 

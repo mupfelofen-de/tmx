@@ -4,11 +4,17 @@
 
 ## About
 
-A portable C library to load [tiled](http://mapeditor.org) maps in your games.
+A fork of baylej's [tmx](https://github.com/baylej/tmx), a portable C
+library to load [tiled](http://mapeditor.org) maps in your games, with
+additional Android asset loading support.
 
 ## Dependencies
 
 This project depends on [Zlib](http://zlib.net/) and [LibXml2](http://xmlsoft.org).
+
+The Android related code also depends on the
+[cwalk](https://github.com/likle/cwalk) library by [Leonard
+Iklé](https://github.com/likle) which is included in this fork.
 
 ## Compiling
 
