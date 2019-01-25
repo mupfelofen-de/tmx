@@ -92,7 +92,10 @@ JNIEXPORT void JNICALL Java_org_libsdl_app_SDL_load(JNIEnv *env, jobject obj, jo
       @Override
       protected void onCreate(Bundle savedInstanceState) {
       // [...]
-        SDL.loadAssetManager(this);
+
+      // Initialize state
+      SDL.initialize();
+      SDL.loadAssetManager(this);
       }
     }
 */
